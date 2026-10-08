@@ -1,0 +1,57 @@
+name: ghsec-c-atk-probe
+# Workstream C probe counterpart: ATTACKER repo.
+# Produces one artifact + one cache, then reports GITHUB_TOKEN derived facts only.
+on:
+  push:
+    branches: [ghsec-c-atk-branch]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: make payload
+        run: |
+          mkdir -p out
+          echo "ghsec-c-attacker-artifact-payload" > out/payload.txt
+          echo "run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" >> out/payload.txt
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghsec-c-atk-artifact
+          path: out/
+
+      - name: create cache
+        uses: actions/cache@v4
+        with:
+          path: out-cache
+          key: ghsec-c-atk-cache-v1
+
+      - name: token-scope-probe
+        env:
+          GH_TOKEN_VALUE: ${{ github.token }}
+          SELF_REPO: ${{ github.repository }}
+          VICTIM_PRIVATE: dinhvaren8-ui/ghsec-alpha
+          VICTIM_PUBLIC: dinhvaren8-ui/ghsec-beta
+        run: |
+          set -uo pipefail
+          probe() {
+            local label="$1" path="$2" code
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN_VALUE" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com$path" 2>/dev/null || echo ERR)
+            echo "PROBE $label $path -> $code"
+          }
+          echo "=== C-workflow-push-token scope report (ATTACKER repo) ==="
+          curl -sS -D /tmp/h.txt -o /dev/null -H "Authorization: Bearer $GH_TOKEN_VALUE" \
+            -H "Accept: application/vnd.github+json" https://api.github.com/repos/$SELF_REPO >/dev/null 2>&1 || true
+          echo "SCOPES_HEADER: $(grep -i '^x-oauth-scopes:' /tmp/h.txt || echo '<absent>')"
+          echo "ACCEPTED_PERMS: $(grep -i '^x-accepted-github-permissions:' /tmp/h.txt || echo '<absent>')"
+          probe self                "/repos/$SELF_REPO"
+          probe victim_private      "/repos/$VICTIM_PRIVATE"
+          probe victim_private_art  "/repos/$VICTIM_PRIVATE/actions/artifacts"
+          probe victim_private_runs "/repos/$VICTIM_PRIVATE/actions/runs"
+          probe victim_public       "/repos/$VICTIM_PUBLIC"
+          echo "=== end report ==="
